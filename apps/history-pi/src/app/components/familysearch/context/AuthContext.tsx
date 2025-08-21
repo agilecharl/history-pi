@@ -1,14 +1,18 @@
 import { useFamilySearchAuth } from '@history-pi/data';
-import { useEffect } from 'react';
+import { ReactNode, useEffect } from 'react';
+
+type AuthComponentProps = {
+  children?: ReactNode;
+};
 
 const config = {
   clientId: 'your-client-id',
   redirectUri: 'https://your-app.com/auth/callback',
-  authBaseUrl: 'https://ident.familysearch.org/cis-web/oauth2/v3/authorization',
+  authBaseUrl: 'https://ident.familysearch.org/cis-web/oauth2/v3/',
   tokenEndpoint: 'https://ident.familysearch.org/cis-web/oauth2/v3/token',
 };
 
-export const AuthComponent = () => {
+export function AuthComponent({ children }: AuthComponentProps) {
   const { handleLogin, handleCallback } = useFamilySearchAuth(config);
 
   useEffect(() => {
@@ -23,4 +27,4 @@ export const AuthComponent = () => {
   }, []);
 
   return <button onClick={handleLogin}>Login with FamilySearch</button>;
-};
+}
