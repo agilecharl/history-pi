@@ -1,5 +1,6 @@
 import { HttpModule, HttpService } from '@nestjs/axios';
 import { Injectable, Module } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 import { URLSearchParams } from 'url';
 
@@ -146,17 +147,18 @@ export class FamilySearchAuthService {
 }
 
 @Module({
-  imports: [HttpModule],
+  imports: [HttpModule, ConfigModule],
   providers: [
     FamilySearchAuthService,
     {
       provide: 'FamilySearchConfig',
-      useValue: {
-        clientId: 'YOUR_CLIENT_ID',
-        redirectUri: 'YOUR_REDIRECT_URI',
-        // clientSecret: 'YOUR_CLIENT_SECRET', // Optional, only for client_credentials
-        // baseUrl: 'https://ident.familysearch.org' // Optional, defaults to production
-      },
+      useFactory: (configService: ConfigService) => ({
+        clientId: configService.get<string>('FAMILYSEARCH_CLIENT_ID'),
+        redirectUri: configService.get<string>('FAMILYSEARCH_REDIRECT_URI'),
+        clientSecret: configService.get<string>('FAMILYSEARCH_CLIENT_SECRET'),
+        baseUrl: configService.get<string>('FAMILYSEARCH_BASE_URL'),
+      }),
+      inject: [ConfigService],
     },
   ],
   exports: [FamilySearchAuthService],
