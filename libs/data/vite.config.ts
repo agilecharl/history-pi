@@ -9,7 +9,7 @@ export default defineConfig(() => ({
   //  plugins: [ nxViteTsPaths() ],
   // },
   test: {
-    name: '@history-pi/data',
+    name: 'utils',
     watch: false,
     globals: true,
     environment: 'node',

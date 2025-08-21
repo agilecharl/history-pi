@@ -1,166 +1,134 @@
-import { HttpModule, HttpService } from '@nestjs/axios';
-import { Injectable, Module } from '@nestjs/common';
-import { ConfigModule, ConfigService } from '@nestjs/config';
-import { firstValueFrom } from 'rxjs';
-import { URLSearchParams } from 'url';
-
 export interface FamilySearchConfig {
   clientId: string;
-  clientSecret?: string;
   redirectUri: string;
-  baseUrl?: string;
+  authBaseUrl: string;
+  tokenEndpoint: string;
+  scopes?: string[];
 }
 
-export interface AccessTokenResponse {
+function stringify(params: Record<string, string>): string {
+  return new URLSearchParams(params).toString();
+}
+
+export interface AuthTokenResponse {
   access_token: string;
   token_type: string;
   id_token?: string;
 }
 
-export interface AuthUrlOptions {
-  scopes?: string[];
-  state?: string;
+export interface AuthError {
+  error: string;
+  error_description: string;
 }
 
-@Injectable()
 export class FamilySearchAuthService {
-  private readonly baseUrl: string;
+  private readonly config: FamilySearchConfig;
 
-  constructor(
-    private readonly httpService: HttpService,
-    private readonly config: FamilySearchConfig
-  ) {
-    this.baseUrl = config.baseUrl || 'https://ident.familysearch.org';
+  constructor(config: FamilySearchConfig) {
+    this.config = {
+      scopes: ['openid', 'profile'],
+      ...config,
+    };
   }
 
   /**
-   * Generates the authorization URL for OAuth 2.0 Authorization Code flow
-   * @param options - Optional parameters including scopes and state
-   * @returns Authorization URL
+   * Initiates the authorization code flow by redirecting to FamilySearch login
    */
-  getAuthorizationUrl(options: AuthUrlOptions = {}): string {
-    const { scopes = [], state } = options;
-    const params = new URLSearchParams({
+  public initiateAuthFlow(): void {
+    const authParams = {
       response_type: 'code',
       client_id: this.config.clientId,
       redirect_uri: this.config.redirectUri,
-    });
+      scope: this.config.scopes?.join(' ') ?? 'openid profile',
+      state: this.generateState(),
+    };
 
-    if (scopes.length > 0) {
-      params.append('scope', scopes.join(' '));
-    }
-    if (state) {
-      params.append('state', state);
-    }
-
-    return `${
-      this.baseUrl
-    }/cis-web/oauth2/v3/authorization?${params.toString()}`;
+    const authUrl = `${this.config.authBaseUrl}/authorization?${stringify(
+      authParams
+    )}`;
+    window.location.href = authUrl;
   }
 
   /**
    * Exchanges authorization code for access token
-   * @param code - Authorization code from redirect
-   * @returns Access token response
+   * @param code The authorization code from the redirect
    */
-  async exchangeCodeForToken(code: string): Promise<AccessTokenResponse> {
-    const params = new URLSearchParams({
-      code,
+  public async exchangeCodeForToken(code: string): Promise<AuthTokenResponse> {
+    const tokenParams = {
       grant_type: 'authorization_code',
+      code,
       redirect_uri: this.config.redirectUri,
       client_id: this.config.clientId,
-    });
+    };
 
     try {
-      const response = await firstValueFrom(
-        this.httpService.post<AccessTokenResponse>(
-          `${this.baseUrl}/cis-web/oauth2/v3/token`,
-          params.toString(),
-          {
-            headers: {
-              'Content-Type': 'application/x-www-form-urlencoded',
-              Accept: 'application/json',
-            },
-          }
-        )
-      );
-      return response.data;
+      const response = await fetch(this.config.tokenEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          Accept: 'application/json',
+        },
+        body: stringify(tokenParams),
+      });
+
+      if (!response.ok) {
+        const error: AuthError = await response.json();
+        throw new Error(`Authentication failed: ${error.error_description}`);
+      }
+
+      const data: AuthTokenResponse = await response.json();
+      return data;
     } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to exchange code for token: ${errorMsg}`);
+      const errorMessage =
+        typeof error === 'object' && error !== null && 'message' in error
+          ? (error as { message: string }).message
+          : String(error);
+      throw new Error(`Token exchange failed: ${errorMessage}`);
     }
   }
 
   /**
-   * Obtains an unauthenticated session token
-   * @returns Access token response
+   * Decodes JWT ID token to extract user information
+   * @param idToken The JWT ID token from the token response
    */
-  async getUnauthenticatedSessionToken(): Promise<AccessTokenResponse> {
-    const params = new URLSearchParams({
-      grant_type: 'unauthenticated_session',
-      client_id: this.config.clientId,
-    });
-
+  public decodeIdToken(idToken: string): Record<string, any> | null {
     try {
-      const response = await firstValueFrom(
-        this.httpService.post<AccessTokenResponse>(
-          `${this.baseUrl}/cis-web/oauth2/v3/token`,
-          params.toString(),
-          {
-            headers: {
-              'Content-Type': 'application/x-www-form-urlencoded',
-              Accept: 'application/json',
-            },
-          }
-        )
-      );
-      return response.data;
+      const payload = idToken.split('.')[1];
+      return JSON.parse(atob(payload));
     } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      throw new Error(
-        `Failed to get unauthenticated session token: ${errorMsg}`
-      );
+      console.error('Failed to decode ID token:', error);
+      return null;
     }
   }
 
   /**
-   * Decodes a JWT token (id_token)
-   * @param token - JWT token to decode
-   * @returns Decoded JWT payload
+   * Generates a random state parameter for CSRF protection
    */
-  decodeJwt(token: string): any {
-    try {
-      const base64Url = token.split('.')[1];
-      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-      const jsonPayload = decodeURIComponent(
-        atob(base64)
-          .split('')
-          .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
-          .join('')
-      );
-      return JSON.parse(jsonPayload);
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to decode JWT: ${errorMsg}`);
-    }
+  private generateState(): string {
+    return Math.random().toString(36).substring(2, 15);
   }
 }
 
-@Module({
-  imports: [HttpModule, ConfigModule],
-  providers: [
-    FamilySearchAuthService,
-    {
-      provide: 'FamilySearchConfig',
-      useFactory: (configService: ConfigService) => ({
-        clientId: configService.get<string>('FAMILYSEARCH_CLIENT_ID'),
-        redirectUri: configService.get<string>('FAMILYSEARCH_REDIRECT_URI'),
-        clientSecret: configService.get<string>('FAMILYSEARCH_CLIENT_SECRET'),
-        baseUrl: configService.get<string>('FAMILYSEARCH_BASE_URL'),
-      }),
-      inject: [ConfigService],
-    },
-  ],
-  exports: [FamilySearchAuthService],
-})
-export class FamilySearchAuthModule {}
+// Example usage in a React component
+export const useFamilySearchAuth = (config: FamilySearchConfig) => {
+  const auth = new FamilySearchAuthService(config);
+
+  const handleLogin = () => {
+    auth.initiateAuthFlow();
+  };
+
+  const handleCallback = async (code: string) => {
+    try {
+      const tokenResponse = await auth.exchangeCodeForToken(code);
+      const userInfo = tokenResponse.id_token
+        ? auth.decodeIdToken(tokenResponse.id_token)
+        : null;
+      return { tokenResponse, userInfo };
+    } catch (error) {
+      console.error('Authentication error:', error);
+      throw error;
+    }
+  };
+
+  return { handleLogin, handleCallback };
+};
